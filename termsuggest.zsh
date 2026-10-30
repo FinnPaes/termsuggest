@@ -34,7 +34,7 @@ typeset -gi _TS_FD=-1 _TS_REQ=0 _TS_QID=0 _TS_SEL=0 _TS_NAV=0 _TS_HIDDEN=0 _TS_T
 typeset -gi _TS_RLEN=0 _TS_TSTART=0 _TS_PROMPTW=0 _TS_SPAWNED=0
 typeset -gi _TS_OVERLAY=0 _TS_OVL_SHOWN=0 _TS_P0=-1
 typeset -g _TS_CELLW=0 _TS_CELLH=0
-typeset -g _TS_LAST=
+typeset -g _TS_LAST= _TS_PD=
 typeset -ga _TS_INS _TS_DISP _TS_DESC _TS_KIND
 typeset -gA _TS_ORIG
 
@@ -148,9 +148,28 @@ _ts_visible() { (( ${#_TS_INS} > 0 && ! _TS_HIDDEN )) }
 _ts_clear() {
   _TS_INS=() _TS_DISP=() _TS_DESC=() _TS_KIND=()
   _TS_SEL=0 _TS_NAV=0
-  POSTDISPLAY=
+  _ts_pd_remove
   region_highlight=( ${region_highlight:#*memo=termsuggest} )
   _ts_overlay_hide
+}
+
+# POSTDISPLAY is shared with other plugins: zsh-autosuggestions shows its gray
+# suggestion there. The inline dropdown is appended after it (_TS_PD) and only
+# that part is removed again.
+_ts_pd_remove() {
+  emulate -L zsh
+  [[ -n $_TS_PD ]] || return 0
+  local all=$BUFFER$POSTDISPLAY
+  if [[ $all == *"$_TS_PD" ]]; then
+    local -i keep=$(( ${#all} - ${#_TS_PD} ))
+    if (( keep >= ${#BUFFER} )); then
+      POSTDISPLAY=${POSTDISPLAY[1,keep-${#BUFFER}]}
+    else
+      # zsh-autosuggestions accepted POSTDISPLAY, dropdown included, into the line.
+      BUFFER=${BUFFER[1,keep]} POSTDISPLAY=
+    fi
+  fi
+  _TS_PD=
 }
 
 _ts_overlay_hide() {
@@ -233,15 +252,12 @@ _ts_measure_prompt() {
 _ts_render() {
   emulate -L zsh
   region_highlight=( ${region_highlight:#*memo=termsuggest} )
+  _ts_pd_remove
   if ! _ts_visible; then
-    POSTDISPLAY=
     _ts_overlay_hide
     return
   fi
-  if (( _TS_OVERLAY )); then
-    POSTDISPLAY=
-    _ts_overlay_show && return
-  fi
+  (( _TS_OVERLAY )) && _ts_overlay_show && return
 
   local -i n=${#_TS_INS} rows=${TERMSUGGEST_MAX_ROWS:-8} cols=$(( COLUMNS - 1 )) i
   (( rows > n )) && rows=n
@@ -280,7 +296,7 @@ _ts_render() {
   local pad=${(l:indent:: :)}
 
   local out= name desc kindc line
-  local -i base=$(( ${#PREDISPLAY} + ${#BUFFER} )) off start
+  local -i base=$(( ${#PREDISPLAY} + ${#BUFFER} + ${#POSTDISPLAY} )) off start
   local -a hl
   local bgc="bg=$_ts_colors[bg]" selc="bg=$_ts_colors[sel_bg],fg=$_ts_colors[sel_fg],bold"
   for (( i = _TS_TOP + 1; i <= _TS_TOP + rows; i++ )); do
@@ -312,7 +328,8 @@ _ts_render() {
       (( descw > 0 )) && hl+=( "$(( start + 3 + ${#name} )) $(( start + ${#line} )) fg=$_ts_colors[desc] memo=termsuggest" )
     fi
   done
-  POSTDISPLAY=$out
+  POSTDISPLAY+=$out
+  _TS_PD=$out
   region_highlight+=( $hl )
 }
 
@@ -370,6 +387,8 @@ _ts_accept() {
     LBUFFER+=$ins
   fi
   _ts_clear
+  # zsh-autosuggestions skips widgets named _*, so its suggestion is now stale.
+  (( ${+widgets[autosuggest-fetch]} )) && zle autosuggest-fetch
 }
 
 _ts_up() {
